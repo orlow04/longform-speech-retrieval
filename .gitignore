@@ -1,0 +1,30 @@
+# Environments
+.venv*/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Data and artifacts: never in git. Provenance lives in runs/, data does not.
+data/
+runs/
+checkpoints/
+*.pt
+*.pkl
+*.npz
+*.wav
+*.mp3
+*.opus
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Experiment trackers
+wandb/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

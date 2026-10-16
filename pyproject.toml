@@ -1,0 +1,56 @@
+[project]
+name = "longform-speech-retrieval"
+version = "0.0.0"
+description = "A research environment for speech retrieval, and retrieval in long-form audio"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "Gabriel Orlow" }]
+keywords = ["speech", "retrieval", "long-form audio", "spoken question answering"]
+
+# The core stays light on purpose. Tasks, metrics, the results store and the
+# retriever protocol must import without torch, so that the metric path can
+# score embeddings produced by any backend in any environment.
+# See docs/DESIGN.md, "The cached-embedding boundary".
+dependencies = [
+  "numpy",
+  "pyyaml",
+  "tqdm",
+]
+
+[project.optional-dependencies]
+# One extra per retriever backend. Each is independently installable and no two
+# are required to coexist.
+clasp = ["torch", "transformers", "sentence-transformers", "torchvision", "Pillow", "librosa", "soundfile"]
+speechrag = ["torch", "transformers", "librosa", "soundfile", "faiss-cpu"]
+cascade = ["nemo-toolkit[asr]", "jiwer", "sentence-transformers"]
+perturb = ["librosa", "soundfile", "scipy"]
+longaudio = ["torch", "transformers", "accelerate", "librosa", "soundfile"]
+
+# NOT installable alongside anything else: funasr 0.7.8 / torch 2.0.1+cu118 /
+# Python 3.8. Runs in its own container and reaches the core through the
+# cached-embedding boundary. Listed here for documentation only.
+# clsr = ["funasr==0.7.8", "modelscope==1.9.4", "transformers==4.33.3"]
+
+dev = ["pytest", "pytest-cov", "ruff"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lsr"]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
