@@ -7,8 +7,17 @@ Spoken queries, spoken documents, or both. Retrievers are pluggable, acoustic
 perturbations apply to any task, and every number carries its provenance. This
 is not a reproduction of a single paper — papers enter as backends and tasks.
 
-See [docs/DESIGN.md](docs/DESIGN.md) for the decisions behind the layout, and
-why three neighbouring repositories stay frozen.
+## Documentation
+
+| | |
+|---|---|
+| [docs/DESIGN.md](docs/DESIGN.md) | the decisions behind the layout, and what each one defends against |
+| [docs/LANDSCAPE.md](docs/LANDSCAPE.md) | the four codebases this grew out of: what to reuse, what is broken |
+| [docs/PAPERS.md](docs/PAPERS.md) | CLSR and ParaSpeechRAG, with the exact numbers to reproduce |
+| [docs/PLAN_CLSR.md](docs/PLAN_CLSR.md) | the plan to reproduce CLSR and test its claim against CLASP |
+
+Read LANDSCAPE.md before touching anything in a neighbouring repository: three
+of them are frozen, and it records why.
 
 ## Status
 
@@ -23,6 +32,11 @@ and their bodies raising `NotImplementedError`. Nothing is implemented yet.
 | `lsr.store` | run manifests, cached-embedding format | stub |
 | `lsr.perturb` | noise, reverb, codec, rate, speaker, emotion | stub |
 | `lsr.longaudio` | segmentation, segment selection, downstream QA | stub |
+
+**Where to start:** `lsr.eval.metrics` and `lsr.tasks.check_task`. Everything
+reports through them, and both are testable against a hand-built five-query
+task with no model, no audio and no GPU — so the metric is trustworthy before
+there is a backend to blame.
 
 ## Install
 
