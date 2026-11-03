@@ -3,18 +3,27 @@
 Every backend, every task and every perturbation condition reports through this
 module, so its conventions are the ones that have to be written down:
 
-- **Ranks are 1-based.** The gold document's rank is one plus the number of
-  documents scored strictly above it. Strictly above, so ties are resolved
-  optimistically — state it, because it changes the number.
-- **Hits@k and Recall@k are not synonyms.** They coincide only when a query has
-  exactly one relevant document. Take qrels as sets and compute each honestly.
-- **A metric without its pool size is not a result.** Carry ``n_queries`` and
-  ``n_documents`` in the output dict.
+- **Ranks are 1-based.** A query's rank is the position of its best-ranked
+  relevant document.
+- **Ties are resolved pessimistically.** Every non-relevant document scoring
+  *greater than or equal to* the best relevant score is counted above it. The
+  inherited code counted only strictly-greater scores, under which a collapsed
+  retriever — every embedding identical, every score tied — reports Hits@1 = 1.0.
+  A broken pipeline must not be able to look perfect.
+- **Only the best relevant rank is kept**, so the metrics here are those that
+  depend on it alone: Hits@k, MRR, mean and median rank. MAP and Recall@k need
+  every relevant document's rank and are not computed. Where a task has exactly
+  one relevant document per query, MAP = MRR and Recall@k = Hits@k, and that is
+  a property of the task, not something this module assumes.
+- **A metric without its pool size is not a result.** ``RankingResult`` carries
+  ``n_queries`` and ``n_documents``.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
@@ -34,6 +43,7 @@ def ranks_from_scores(
     qrels: dict[str, set[str]],
     query_ids: list[str],
     document_ids: list[str],
+    on_missing: Literal["raise", "last"] = "raise",
 ) -> np.ndarray:
     """Rank of the best-ranked relevant document per query, 1-based.
 
@@ -42,20 +52,73 @@ def ranks_from_scores(
     truth, which silently ties the metric to row order and makes a shuffled pool
     produce nonsense. Ground truth comes from qrels and ids.
 
-    TODO(you): decide the policy for a query whose relevant documents are all
-    outside the pool — drop it and report the count, or rank it last. Either is
-    defensible; silently dropping is not.
+    A query with no relevant document in the pool cannot be ranked. By default
+    that raises, listing the offenders — ``check_task`` should have caught it.
+    With ``on_missing="last"`` such a query gets rank ``n_documents + 1``: a miss
+    at every cutoff, still counted in the denominator. Queries are never dropped.
     """
-    raise NotImplementedError
+    scores = np.asarray(scores)
+    if scores.shape != (len(query_ids), len(document_ids)):
+        raise ValueError(
+            f"scores has shape {scores.shape}, expected "
+            f"({len(query_ids)}, {len(document_ids)}) from the id lists"
+        )
+    if not np.all(np.isfinite(scores)):
+        raise ValueError("scores contain NaN or inf")
+
+    doc_index = {d: i for i, d in enumerate(document_ids)}
+    if len(doc_index) != len(document_ids):
+        raise ValueError("document_ids contain duplicates")
+
+    n_docs = len(document_ids)
+    ranks = np.empty(len(query_ids), dtype=np.int64)
+    missing: list[str] = []
+    for qi, qid in enumerate(query_ids):
+        relevant = [doc_index[d] for d in qrels.get(qid, ()) if d in doc_index]
+        if not relevant:
+            missing.append(qid)
+            ranks[qi] = n_docs + 1
+            continue
+        row = scores[qi]
+        is_relevant = np.zeros(n_docs, dtype=bool)
+        is_relevant[relevant] = True
+        best = row[is_relevant].max()
+        ranks[qi] = 1 + int(np.count_nonzero((row >= best) & ~is_relevant))
+
+    if missing and on_missing == "raise":
+        shown = ", ".join(missing[:10]) + (" ..." if len(missing) > 10 else "")
+        raise ValueError(f"{len(missing)} queries have no relevant document in the pool: {shown}")
+    return ranks
+
+
+_HITS = re.compile(r"Hits@(\d+)")
+
+
+def _metric_values(ranks: np.ndarray, metric: str) -> np.ndarray:
+    """Evaluate ``metric`` along the last axis of ``ranks``; works on 1-D or 2-D."""
+    if m := _HITS.fullmatch(metric):
+        return (ranks <= int(m.group(1))).mean(axis=-1)
+    if metric == "MRR":
+        return (1.0 / ranks).mean(axis=-1)
+    if metric == "mean_rank":
+        return ranks.mean(axis=-1)
+    if metric == "median_rank":
+        return np.median(ranks, axis=-1)
+    raise ValueError(f"unknown metric {metric!r}")
 
 
 def compute_metrics(ranks: np.ndarray, ks: tuple[int, ...] = (1, 5, 10, 50)) -> dict[str, float]:
-    """Hits@k, MRR, MAP, mean and median rank from 1-based ranks.
+    """Hits@k, MRR, mean and median rank from 1-based best-relevant ranks.
 
-    TODO(you): with one relevant document per query, AP = 1/rank so MAP = MRR.
-    Decide whether to emit both (clear, redundant) or one with a note.
+    MAP is deliberately absent; see the module docstring.
     """
-    raise NotImplementedError
+    ranks = np.asarray(ranks)
+    if ranks.ndim != 1 or ranks.size == 0:
+        raise ValueError("ranks must be a non-empty 1-D array")
+    if ranks.min() < 1:
+        raise ValueError("ranks are 1-based; got a value below 1")
+    names = [f"Hits@{k}" for k in ks] + ["MRR", "mean_rank", "median_rank"]
+    return {name: float(_metric_values(ranks, name)) for name in names}
 
 
 def bootstrap_ci(
@@ -71,4 +134,14 @@ def bootstrap_ci(
     something a reviewer can assess. Resamples queries, never documents — the
     pool is fixed by the task.
     """
-    raise NotImplementedError
+    ranks = np.asarray(ranks)
+    if ranks.ndim != 1 or ranks.size == 0:
+        raise ValueError("ranks must be a non-empty 1-D array")
+    if not 0 < confidence < 1:
+        raise ValueError("confidence must be in (0, 1)")
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, ranks.size, size=(n_resamples, ranks.size))
+    values = _metric_values(ranks[idx], metric)
+    alpha = (1 - confidence) / 2
+    lo, hi = np.quantile(values, [alpha, 1 - alpha])
+    return float(lo), float(hi)

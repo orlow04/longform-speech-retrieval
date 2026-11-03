@@ -14,29 +14,33 @@ is not a reproduction of a single paper — papers enter as backends and tasks.
 | [docs/DESIGN.md](docs/DESIGN.md) | the decisions behind the layout, and what each one defends against |
 | [docs/LANDSCAPE.md](docs/LANDSCAPE.md) | the four codebases this grew out of: what to reuse, what is broken |
 | [docs/PAPERS.md](docs/PAPERS.md) | CLSR and ParaSpeechRAG, with the exact numbers to reproduce |
-| [docs/PLAN_CLSR.md](docs/PLAN_CLSR.md) | the plan to reproduce CLSR and test its claim against CLASP |
+| [docs/PLAN.md](docs/PLAN.md) | **the current plan**: MSEB, long-form audio retrieval vs. ASR, degradations |
+| [docs/PLAN_CLSR.md](docs/PLAN_CLSR.md) | reproducing CLSR as a reference system |
 
 Read LANDSCAPE.md before touching anything in a neighbouring repository: three
 of them are frozen, and it records why.
 
 ## Status
 
-Scaffolding. The interfaces below are stubs with their contracts written down
-and their bodies raising `NotImplementedError`. Nothing is implemented yet.
+The metric path is implemented and tested against a hand-built task: task
+validation, dense scoring, ranks and metrics with bootstrap CIs, and the
+cached-embedding boundary. Everything else is a stub whose body raises
+`NotImplementedError`.
 
 | Module | What it owns | State |
 |---|---|---|
-| `lsr.tasks` | a Task = queries, documents, qrels, modalities, pool | stub |
-| `lsr.retrievers` | one protocol, N backends | stub |
-| `lsr.eval` | Hits@k, MRR, MAP, bootstrap CIs | stub |
-| `lsr.store` | run manifests, cached-embedding format | stub |
+| `lsr.tasks` | a Task = queries, documents, qrels, modalities, pool | `check_task`; LibriSQA, SLUE-SQA-5, Spoken-SQuAD builder |
+| `lsr.retrievers` | one protocol, N backends | protocol + `score_dense`; no backends yet |
+| `lsr.eval` | Hits@k, MRR, rank stats, bootstrap CIs | done |
+| `lsr.store` | run manifests, cached-embedding format | done |
 | `lsr.perturb` | noise, reverb, codec, rate, speaker, emotion | stub |
-| `lsr.longaudio` | segmentation, segment selection, downstream QA | stub |
+| `lsr.longaudio` | segmentation, segment selection, downstream QA | fixed windows, localization; no selector yet |
 
-**Where to start:** `lsr.eval.metrics` and `lsr.tasks.check_task`. Everything
-reports through them, and both are testable against a hand-built five-query
-task with no model, no audio and no GPU — so the metric is trustworthy before
-there is a backend to blame.
+**Next:** build Spoken-SQuAD on `lab150` (`scripts/build_spoken_squad.py`),
+then the long-form task over its article recordings — see docs/PLAN.md.
+
+Tests against the CLSR release itself run when `LSR_CLSR_ROOT` points at a
+clone of `github.com/193746/CLSR`; otherwise they skip.
 
 ## Install
 

@@ -1,6 +1,8 @@
 # Plan: reproduce CLSR, and test its claim against CLASP
 
-Drafted 2026-10-05, rehomed into `lsr` on 2026-10-19. Background in
+Drafted 2026-10-05, rehomed into `lsr` on 2026-10-19. **Since 2026-11-03 the
+project plan is [PLAN.md](PLAN.md)**; this file stays as the reference for
+reproducing CLSR. DRCD is out of scope. Background in
 [PAPERS.md](PAPERS.md) and [LANDSCAPE.md](LANDSCAPE.md).
 
 ## Why
@@ -23,19 +25,23 @@ work specific to CLSR.
 
 Nothing below is meaningful until this is done.
 
-1. Establish from `build_spoken_squad_pkl.py` and the WAV layout on `lab150`
-   (`/timevoz/CLASP/data/datasets/`) exactly what the audio is: a reading of
-   the paragraph context, or a synthesised question. See the finding in
-   [LANDSCAPE.md](LANDSCAPE.md).
-2. If it is context readings, the ParaSpeechRAG paper's "spoken queries"
-   framing needs correcting. That is a paper-level issue — raise it, don't work
+1. ~~Establish what the Spoken-SQuAD audio is.~~ **Settled 2026-11-03**: the
+   audio is the TTS reading of the Wikipedia context, one file per sentence,
+   which CLASP concatenates into one recording per paragraph. CLASP's task is
+   therefore spoken context <-> its own text (`spoken_squad_self`), as
+   [LANDSCAPE.md](LANDSCAPE.md) suspected.
+2. That makes the ParaSpeechRAG paper's "spoken queries" framing a reading of
+   the passage, not a question. Paper-level issue — raise it, don't work
    around it.
-3. Define the comparison task once, as a config: **spoken question → text
-   passage**, question audio on the query side, the full 2,067-paragraph
-   validation pool as candidates. Build it from SQuAD questions; where question
-   audio does not exist, synthesise it and record the TTS system and voice as
-   part of the task definition. Name it so it can never be confused with the
-   self-retrieval variant.
+3. **No TTS is needed for the CLSR comparison.** The audit shows CLSR's
+   text-context variant is *text question -> spoken context* (see
+   LANDSCAPE.md), and Spoken-SQuAD ships text questions plus spoken contexts.
+   So `spoken_squad_tq2ac` is built from data we already have: SQuAD questions
+   as text queries, the concatenated context audio as documents, the full
+   validation pool as candidates. Write the builder to emit CLSR-format
+   manifests (`que.txt` / `con.txt` / `wav.scp`) and load it with
+   `lsr.tasks.ManifestTask`, in both the filtered (Spoken-SQuAD\*) and
+   unfiltered variants.
 
 ## Track A — Reproduce the authors' release
 
@@ -66,11 +72,9 @@ Runs on `lab150`. Multi-day.
      29.89, WER 16.69. Do this one first as the end-to-end shakedown.
    - **LibriSQA (`aqtc`)** — manifests shipped. Target 85.04 / 85.53, WER 4.09.
      Report on the release's split and note that it is also its validation split.
-   - **Spoken-SQuAD** — manifests not shipped, so write the builder in the
-     release's `wav.scp` / `que.txt` / `con.txt` format. Build **both** the
+   - **Spoken-SQuAD** — manifests not shipped; the builder from Track 0 step 3. Build **both** the
      filtered and unfiltered variants, so Table 2's 70.03 and Tables 3–4's
      49.82 each get their own reference.
-   - Skip DRCD\* unless the above replicate.
 5. **Reproduce the architectural claim.** Train ParaBGE on Spoken-SQuAD and
    LibriSQA. It is the paper's load-bearing evidence and CLASP's direct
    analogue, so it must be our number, not theirs.
@@ -105,6 +109,8 @@ things at once answers nothing.
    which would be a genuinely new result rather than a reproduction.
 
 ## Track C — Long-form SQA
+
+Now pillar 2 of [PLAN.md](PLAN.md), as its dataset L2.
 
 No released code; built from scratch. The 30-second encoder window governs the
 design — see the trap in [PAPERS.md](PAPERS.md).

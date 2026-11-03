@@ -8,6 +8,7 @@ explicitly".
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Literal, Protocol
@@ -85,11 +86,62 @@ class Task(Protocol):
 def check_task(task: Task) -> None:
     """Assert a task is internally consistent before anything is run on it.
 
-    Intended to catch, at minimum: qrels referencing unknown query or document
-    ids, queries whose populated field disagrees with ``query_modality``,
-    duplicate ids on either side, and an empty pool.
+    Checks: a non-empty name; no duplicate ids on either side; every query and
+    document populates exactly the field its modality calls for; a non-empty
+    pool; every query has at least one relevant document; and qrels reference
+    only known query and document ids.
 
-    TODO(you): this is the cheapest bug-catcher in the repo. Write it before the
-    first task.
+    Collects every problem and raises one ``ValueError`` listing them, so a
+    broken task is diagnosed in one pass rather than one fix at a time.
     """
-    raise NotImplementedError
+    problems: list[str] = []
+    if not getattr(task, "name", ""):
+        problems.append("task has no name")
+
+    queries = list(task.queries())
+    documents = list(task.documents())
+    qrels = task.qrels()
+
+    def side(items, modality: Modality, label: str) -> set[str]:
+        ids = [x.id for x in items]
+        dupes = sorted(i for i, n in Counter(ids).items() if n > 1)
+        if dupes:
+            problems.append(f"duplicate {label} ids: {_show(dupes)}")
+        wrong = [
+            x.id for x in items
+            if (x.text is not None) != (modality == "text")
+            or (x.audio_path is not None) != (modality == "audio")
+        ]
+        if wrong:
+            problems.append(
+                f"{len(wrong)} {label}s do not set exactly the {modality!r} field: {_show(wrong)}"
+            )
+        return set(ids)
+
+    query_ids = side(queries, task.query_modality, "query")
+    doc_ids = side(documents, task.document_modality, "document")
+
+    if not queries:
+        problems.append("no queries")
+    if not documents:
+        problems.append("empty pool")
+
+    unknown_q = sorted(set(qrels) - query_ids)
+    if unknown_q:
+        problems.append(f"qrels reference {len(unknown_q)} unknown query ids: {_show(unknown_q)}")
+    unknown_d = sorted({d for rel in qrels.values() for d in rel} - doc_ids)
+    if unknown_d:
+        problems.append(
+            f"qrels reference {len(unknown_d)} document ids outside the pool: {_show(unknown_d)}"
+        )
+    unjudged = sorted(q for q in query_ids if not qrels.get(q))
+    if unjudged:
+        problems.append(f"{len(unjudged)} queries have no relevant document: {_show(unjudged)}")
+
+    if problems:
+        raise ValueError(f"task {getattr(task, 'name', '?')!r} is inconsistent:\n  - "
+                         + "\n  - ".join(problems))
+
+
+def _show(ids: list[str], limit: int = 5) -> str:
+    return ", ".join(ids[:limit]) + (" ..." if len(ids) > limit else "")

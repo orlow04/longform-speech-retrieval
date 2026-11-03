@@ -154,12 +154,30 @@ problems are confirmed rather than suspected.
   (77 KB), `attention.py`, `build_trainer.py` (38 KB). The novel part is small
   and liftable: `src/my_vector_quantizer.py`, 6 KB. CIF comes from Paraformer
   itself.
-- **The open question that gates any port.** `Q^st @ W_te` needs one-hot
-  vectors over the *text encoder's* vocabulary, but the quantizer's argmax is
-  over Paraformer's 4,199-token vocabulary. Whether there is a mapping or a
-  vocabulary substitution decides whether the idea transfers to a different
-  text encoder at all. Resolve it by reading `my_vector_quantizer.py` before
-  writing any adaptor here.
+- **Audited at `1a03529` (2026-11-03).** What the code actually does, which
+  settles the questions the paper leaves open:
+  - **Direction.** `CLSR_aqtc` is *text question -> spoken context*, despite
+    its name: `wav.scp` holds the LibriSpeech reading of the context, `con.txt`
+    is both its ASR target and the retrieved side, and `que.txt` is encoded as
+    text by frozen BGE (`MyParaformer.py:543-561`). `CLSR_aqac` is genuinely
+    audio question -> audio context (`data_names: sque,scon,que,con`).
+  - **Pool.** `Trainer.evaluate` (`build_trainer.py`) concatenates every test
+    batch and scores the full split, ground truth on the diagonal. So the pool
+    is the split, not the batch — but it holds one row per *question*, and a
+    context asked about several times appears several times. SLUE-SQA-5 test
+    has 2,382 rows over 1,969 distinct contexts; the twins tie with the gold
+    row and `argsort` breaks the tie arbitrarily. `lsr.tasks.ManifestTask`
+    offers both this `rows` pool and a deduplicated `unique` pool.
+  - **Vocabulary.** The bridge does not map Paraformer's 4,199-token
+    vocabulary onto BGE's: it replaces it. Contexts are tokenised with BGE's
+    tokenizer, the decoder loss runs over `bge_vocab_size = 30522`, and the VQ
+    output multiplies `text_encoder.embeddings.word_embeddings.weight`
+    (`MyParaformer.py:99,554,575`). So the idea transfers to another text
+    encoder by retraining the decoder's output layer over that encoder's
+    vocabulary. The exact place the shipped 4,200-entry `token_list` gets
+    overridden has not been traced.
+  - Two LibriSQA test utterances share a transcript, so the text-side pool has
+    2,619 contexts and the audio-side pool 2,620.
 
 Because of the dependency island, CLSR is the motivating case for the
 cached-embedding boundary in [DESIGN.md](DESIGN.md): it runs in its own

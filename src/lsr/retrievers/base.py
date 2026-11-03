@@ -74,7 +74,17 @@ def score_dense(query_emb: np.ndarray, document_emb: np.ndarray) -> np.ndarray:
     what made the inherited ``build_similarity_matrix`` unusable past a few
     thousand rows, and the pool here is meant to grow.
 
-    TODO(you): decide whether this blocks over documents for memory. At 2k x 2k
-    it is irrelevant; at 100k documents x 4096 dims it is not.
+    No blocking over documents: at 2k x 2k the matrix is 16 MB. The constraint
+    that will bite first is the ``[Nq, Nd]`` output itself, and fixing that
+    means returning top-k per query rather than blocking the matmul — a change
+    to the contract, to be made when a pool large enough to need it exists.
     """
-    raise NotImplementedError
+    query_emb = np.asarray(query_emb)
+    document_emb = np.asarray(document_emb)
+    if query_emb.ndim != 2 or document_emb.ndim != 2:
+        raise ValueError("embeddings must be 2-D")
+    if query_emb.shape[1] != document_emb.shape[1]:
+        raise ValueError(
+            f"dimension mismatch: queries {query_emb.shape[1]}, documents {document_emb.shape[1]}"
+        )
+    return query_emb @ document_emb.T

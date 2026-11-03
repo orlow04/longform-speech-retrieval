@@ -1,0 +1,10 @@
+# Build Spoken-SQuAD's dev split into paragraph manifests + article recordings.
+# Paths are relative to the repo root, or absolute on the box via env override:
+#   LSR_DATA=/timevoz/CLASP/data/datasets uv run python scripts/build_spoken_squad.py \
+#       --config configs/spoken_squad_dev.yaml
+# ${LSR_DATA} is expanded from the environment; it defaults to data/.
+# UNCONFIRMED: the file and folder names below are the public release names;
+# check them against the layout on lab150 before the first build.
+json: ${LSR_DATA}/spoken_squad/spoken_test-v1.1.json
+wav_dir: ${LSR_DATA}/spoken_squad/wav/dev
+out_dir: ${LSR_DATA}/lsr/spoken_squad/dev

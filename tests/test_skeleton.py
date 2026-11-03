@@ -1,8 +1,6 @@
 """Checks the skeleton holds together, and pins two invariants worth keeping.
 
-These pass today against stubs. As each part gets written, the
-``NotImplementedError`` expectations below should be replaced by real tests of
-behaviour — they are a to-do list as much as a test file.
+Behaviour of the implemented core is tested in test_core.py.
 """
 
 import importlib
@@ -51,24 +49,3 @@ def test_segment_duration():
 
     seg = Segment(id="s0", parent_id="rec0", audio_path="/dev/null", start_s=10.0, end_s=50.0)
     assert seg.duration_s == 40.0
-
-
-@pytest.mark.parametrize(
-    "call",
-    [
-        pytest.param(lambda: __import__("lsr.eval", fromlist=["compute_metrics"]).compute_metrics(
-            __import__("numpy").array([1, 2, 3])
-        ), id="compute_metrics"),
-        pytest.param(lambda: __import__("lsr.retrievers", fromlist=["score_dense"]).score_dense(
-            __import__("numpy").zeros((2, 4)), __import__("numpy").zeros((3, 4))
-        ), id="score_dense"),
-        pytest.param(
-            lambda: __import__("lsr.store", fromlist=["current_manifest"]).current_manifest(),
-            id="current_manifest",
-        ),
-    ],
-)
-def test_stubs_are_honest(call):
-    """A stub raises rather than returning something plausible and wrong."""
-    with pytest.raises(NotImplementedError):
-        call()

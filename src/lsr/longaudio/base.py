@@ -21,6 +21,7 @@ in this area go wrong:
 
 from __future__ import annotations
 
+import wave
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -68,6 +69,11 @@ class Selector(Protocol):
         ...
 
 
+def overlap_s(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
+    """Length of the intersection of two time spans, 0 if disjoint."""
+    return max(0.0, min(a_end, b_end) - max(a_start, b_start))
+
+
 def localization_accuracy(
     selected: list[Segment],
     gold_start_s: float,
@@ -80,17 +86,71 @@ def localization_accuracy(
     The retrieval-side ground truth for a long-audio pipeline, independent of
     the downstream answer.
 
-    TODO(you): decide what counts as overlap. Any intersection is generous; the
-    answer being wholly contained is strict. The choice changes the headline
-    number, so it belongs in the task definition rather than in a default here.
+    A segment counts when it intersects the gold span by *more than*
+    ``min_overlap_s`` seconds; at the default 0.0 that is any non-empty
+    intersection, so merely touching at an endpoint does not count. Strictness
+    is the caller's choice and belongs in the task config; setting
+    ``min_overlap_s`` to the gold span's length demands full containment.
+    Only segments of the same recording are considered.
     """
-    raise NotImplementedError
+    return any(
+        overlap_s(s.start_s, s.end_s, gold_start_s, gold_end_s) > min_overlap_s
+        for s in selected
+    )
 
 
 def as_documents(segments: list[Segment]) -> list[Document]:
     """Expose segments as retrievable documents, preserving parent and timing.
 
     This is what lets the ordinary retriever protocol and the ordinary metric
-    core operate on long audio with no special casing.
+    core operate on long audio with no special casing. ``audio_path`` is the
+    parent recording; the span is in ``start_s`` / ``end_s``, and a backend must
+    honour it rather than embed the whole file.
     """
-    raise NotImplementedError
+    return [
+        Document(id=s.id, audio_path=s.audio_path, parent_id=s.parent_id,
+                 start_s=s.start_s, end_s=s.end_s)
+        for s in segments
+    ]
+
+
+def wav_duration_s(path: str) -> float:
+    """Duration of a PCM WAV, read from its header."""
+    with wave.open(path, "rb") as f:
+        return f.getnframes() / f.getframerate()
+
+
+@dataclass(frozen=True)
+class FixedWindowSegmenter:
+    """Fixed-width windows every ``hop_s`` seconds; the last is cut at the end.
+
+    ``hop_s < window_s`` gives overlap, which is what keeps an answer from being
+    split in half at a boundary. Windows never leave a gap, so the recording is
+    covered end to end; the final window may be shorter than ``window_s``.
+    """
+
+    window_s: float
+    hop_s: float | None = None
+
+    @property
+    def name(self) -> str:
+        return f"fixed_w{self.window_s:g}_h{self.hop:g}"
+
+    @property
+    def hop(self) -> float:
+        return self.window_s if self.hop_s is None else self.hop_s
+
+    def segment(self, audio_path: str, parent_id: str, duration_s: float | None = None
+                ) -> list[Segment]:
+        if self.window_s <= 0 or not 0 < self.hop <= self.window_s:
+            raise ValueError("need window_s > 0 and 0 < hop_s <= window_s (no gaps)")
+        total = wav_duration_s(audio_path) if duration_s is None else duration_s
+        segments, start, n = [], 0.0, 0
+        while True:
+            end = min(start + self.window_s, total)
+            segments.append(Segment(id=f"{parent_id}#{n}", parent_id=parent_id,
+                                    audio_path=audio_path, start_s=start, end_s=end))
+            if end >= total:
+                return segments
+            n += 1
+            start = n * self.hop
