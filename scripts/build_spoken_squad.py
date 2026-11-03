@@ -23,7 +23,7 @@ from lsr.tasks.spoken_squad import build_spoken_squad
 
 
 def load_config(path: Path) -> dict[str, str]:
-    env = {"LSR_DATA": "data", **os.environ}
+    env = {"LSR_DATA": "data/datasets", **os.environ}
     raw = yaml.safe_load(path.read_text())
     return {k: string.Template(str(v)).substitute(env) for k, v in raw.items()}
 
@@ -34,7 +34,8 @@ def main() -> None:
     cfg = load_config(parser.parse_args().config)
     out_dir = Path(cfg["out_dir"])
 
-    counts = build_spoken_squad(Path(cfg["json"]), Path(cfg["wav_dir"]), out_dir)
+    articles = [int(a) for a in cfg["articles"].split(",")] if cfg.get("articles") else None
+    counts = build_spoken_squad(Path(cfg["json"]), Path(cfg["wav_dir"]), out_dir, articles)
     task = ManifestTask("spoken_squad", out_dir, "text", "audio", audio_root=out_dir)
     check_task(task)
 

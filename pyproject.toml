@@ -23,7 +23,8 @@ dependencies = [
 # are required to coexist.
 clasp = ["torch", "transformers", "sentence-transformers", "torchvision", "Pillow", "librosa", "soundfile"]
 speechrag = ["torch", "transformers", "librosa", "soundfile", "faiss-cpu"]
-cascade = ["nemo-toolkit[asr]", "jiwer", "sentence-transformers"]
+cascade = ["torch", "transformers", "accelerate", "sentence-transformers", "jiwer", "librosa", "soundfile"]
+parakeet = ["nemo-toolkit[asr]", "jiwer", "sentence-transformers"]
 perturb = ["librosa", "soundfile", "scipy"]
 longaudio = ["torch", "transformers", "accelerate", "librosa", "soundfile"]
 

@@ -145,3 +145,34 @@ def bootstrap_ci(
     alpha = (1 - confidence) / 2
     lo, hi = np.quantile(values, [alpha, 1 - alpha])
     return float(lo), float(hi)
+
+
+def ranks_within_groups(
+    scores: np.ndarray,
+    qrels: dict[str, set[str]],
+    query_ids: list[str],
+    document_ids: list[str],
+    query_group: dict[str, str],
+    document_group: dict[str, str],
+) -> np.ndarray:
+    """Like ``ranks_from_scores``, but each query competes only within its group.
+
+    For long-form audio the group is the recording: "find the answer in this
+    recording" ranks a question against its own recording's segments, not the
+    whole archive. Ranks come back in ``query_ids`` order, so the result feeds
+    ``compute_metrics`` and ``bootstrap_ci`` unchanged. A query whose group has
+    no relevant document raises, as in ``ranks_from_scores``.
+    """
+    scores = np.asarray(scores)
+    docs_by_group: dict[str, list[int]] = {}
+    for j, d in enumerate(document_ids):
+        docs_by_group.setdefault(document_group[d], []).append(j)
+    ranks = np.empty(len(query_ids), dtype=np.int64)
+    for qi, q in enumerate(query_ids):
+        cols = docs_by_group.get(query_group[q], [])
+        if not cols:
+            raise ValueError(f"query {q!r}: group {query_group[q]!r} has no documents")
+        ranks[qi] = ranks_from_scores(
+            scores[qi : qi + 1, cols], qrels, [q], [document_ids[j] for j in cols]
+        )[0]
+    return ranks

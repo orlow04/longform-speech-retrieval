@@ -111,7 +111,9 @@ def concat_wavs(paths: list[Path], out_path: Path) -> list[tuple[float, float]]:
     return spans
 
 
-def build_spoken_squad(json_path: Path, wav_dir: Path, out_dir: Path) -> dict[str, int]:
+def build_spoken_squad(
+    json_path: Path, wav_dir: Path, out_dir: Path, articles: list[int] | None = None
+) -> dict[str, int]:
     """Write paragraph manifests, paragraph and article audio, and ``articles.jsonl``.
 
     Layout under ``out_dir`` (one split)::
@@ -123,10 +125,18 @@ def build_spoken_squad(json_path: Path, wav_dir: Path, out_dir: Path) -> dict[st
 
     Audio paths in the manifests are relative to ``out_dir``, so the directory
     can be rsynced as a whole; pass ``audio_root=out_dir`` to ``ManifestTask``.
+    ``articles`` restricts the build to those article indices — for smoke runs,
+    and so that conditions built from different voice folders cover the same
+    articles. An index with no audio raises rather than shrinking the set.
     Returns counts for the build log.
     """
     out_dir = Path(out_dir)
     paragraphs, missing = collect_paragraphs(json_path, wav_dir)
+    if articles is not None:
+        absent = set(articles) - {p.article for p in paragraphs}
+        if absent:
+            raise ValueError(f"{wav_dir} has no audio for articles {sorted(absent)}")
+        paragraphs = [p for p in paragraphs if p.article in set(articles)]
 
     by_article: dict[int, list[Paragraph]] = defaultdict(list)
     que, con, scp = [], [], []
@@ -166,3 +176,68 @@ def build_spoken_squad(json_path: Path, wav_dir: Path, out_dir: Path) -> dict[st
         "paragraphs_without_audio": missing,
         "questions": len(que),
     }
+
+
+@dataclass
+class LongFormTask:
+    """Text question -> window of an article recording, from a build directory.
+
+    Documents are the windows ``segmenter`` cuts from every article recording.
+    A window is relevant to a question when it overlaps the question's
+    paragraph by at least ``min(min_overlap_s, paragraph duration)`` seconds —
+    enough that a window grazing the paragraph's edge does not count, without
+    making a short paragraph impossible to hit.
+
+    The pool is the whole archive. For "find it in this recording", rank with
+    ``lsr.eval.ranks_within_groups`` using ``query_group`` / ``document_group``.
+    """
+
+    build_dir: Path
+    segmenter: object  # lsr.longaudio.Segmenter; untyped to keep tasks free of longaudio
+    min_overlap_s: float = 5.0
+    query_modality: str = "text"
+    document_modality: str = "audio"
+    name: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        from lsr.longaudio import as_documents, overlap_s
+        from lsr.tasks.base import Query
+        from lsr.tasks.clsr import read_manifest
+
+        self.build_dir = Path(self.build_dir)
+        self.name = f"spoken_squad_longform_tq2ac_{self.build_dir.name}_{self.segmenter.name}"
+        questions = read_manifest(self.build_dir / "que.txt")
+        self.articles = [
+            json.loads(line)
+            for line in (self.build_dir / "articles.jsonl").read_text().splitlines()
+        ]
+        self.gold_span: dict[str, tuple[float, float]] = {}
+        self.query_group: dict[str, str] = {}
+        self.document_group: dict[str, str] = {}
+        self._queries, self._documents, self._qrels = [], [], {}
+        for art in self.articles:
+            audio = str(self.build_dir / art["audio"])
+            segments = self.segmenter.segment(audio, art["article_id"],
+                                              duration_s=art["duration_s"])
+            self._documents += as_documents(segments)
+            for s in segments:
+                self.document_group[s.id] = art["article_id"]
+            for para in art["paragraphs"]:
+                span = (para["start_s"], para["end_s"])
+                need = min(self.min_overlap_s, span[1] - span[0])
+                relevant = {s.id for s in segments
+                            if overlap_s(s.start_s, s.end_s, *span) >= need}
+                for qid in para["question_ids"]:
+                    self._queries.append(Query(id=qid, text=questions[qid]))
+                    self._qrels[qid] = relevant
+                    self.gold_span[qid] = span
+                    self.query_group[qid] = art["article_id"]
+
+    def queries(self):
+        yield from self._queries
+
+    def documents(self):
+        yield from self._documents
+
+    def qrels(self) -> dict[str, set[str]]:
+        return {k: set(v) for k, v in self._qrels.items()}

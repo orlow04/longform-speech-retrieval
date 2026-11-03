@@ -36,8 +36,18 @@ cached-embedding boundary. Everything else is a stub whose body raises
 | `lsr.perturb` | noise, reverb, codec, rate, speaker, emotion | stub |
 | `lsr.longaudio` | segmentation, segment selection, downstream QA | fixed windows, localization; no selector yet |
 
-**Next:** build Spoken-SQuAD on `lab150` (`scripts/build_spoken_squad.py`),
-then the long-form task over its article recordings — see docs/PLAN.md.
+**First GPU try** — Spoken-SQuAD dev, three articles, original voice vs. one
+male and one female voice conversion, ASR cascade vs. clean text, paragraph and
+long-form:
+
+```sh
+uv pip install -e ".[dev,cascade]"
+uv run python scripts/download_spoken_squad.py      # JSON + dev audio, ~4.7 GB
+uv run python scripts/smoke_spoken_squad.py --config configs/smoke_spoken_squad.yaml
+```
+
+Datasets live under `data/datasets/<name>/` (override with `$LSR_DATA`);
+builds under `data/builds/`; every scored run under `runs/<run_id>/`.
 
 Tests against the CLSR release itself run when `LSR_CLSR_ROOT` points at a
 clone of `github.com/193746/CLSR`; otherwise they skip.
@@ -54,7 +64,7 @@ Backends are separate extras and none requires another:
 ```sh
 uv pip install -e ".[clasp]"      # fusion MLP over frozen HuBERT + spectrogram
 uv pip install -e ".[speechrag]"  # distilled adapter into a text embedding space
-uv pip install -e ".[cascade]"    # ASR -> text retrieval
+uv pip install -e ".[cascade]"    # Whisper ASR -> text retrieval, on one GPU
 uv pip install -e ".[longaudio]"  # segmentation + a downstream audio LM
 ```
 

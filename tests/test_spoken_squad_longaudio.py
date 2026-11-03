@@ -6,6 +6,7 @@ import json
 import wave
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from lsr.longaudio import (
@@ -160,3 +161,52 @@ def test_segments_as_documents_keep_timing():
     (doc,) = as_documents([seg])
     assert (doc.id, doc.parent_id, doc.audio_path, doc.start_s, doc.end_s) == (
         "r#1", "r", "r.wav", 40, 80)
+
+
+# --- article filter, long-form task, within-recording ranks ---------------------
+
+
+def test_build_restricts_to_articles(raw):
+    counts = build_spoken_squad(raw / "squad.json", raw / "wav", raw / "out1", articles=[1])
+    assert (counts["articles"], counts["questions"]) == (1, 1)
+    with pytest.raises(ValueError, match=r"no audio for articles \[7\]"):
+        build_spoken_squad(raw / "squad.json", raw / "wav", raw / "out2", articles=[1, 7])
+
+
+def test_longform_task(raw):
+    from lsr.tasks.spoken_squad import LongFormTask
+
+    out = raw / "out"
+    build_spoken_squad(raw / "squad.json", raw / "wav", out)
+    # Article 0 is 6 s (paragraphs 0-3 s, 3-6 s); article 1 is 4 s (one paragraph).
+    task = LongFormTask(out, FixedWindowSegmenter(window_s=2), min_overlap_s=1.0)
+    check_task(task)
+    assert task.name == "spoken_squad_longform_tq2ac_out_fixed_w2_h2"
+    assert [d.id for d in task.documents()] == ["0#0", "0#1", "0#2", "1#0", "1#1"]
+    qrels = task.qrels()
+    assert qrels["qa"] == qrels["qb"] == {"0#0", "0#1"}  # 2-3 s overlaps 1 s: counts
+    assert qrels["qc"] == {"0#1", "0#2"}
+    assert qrels["qd"] == {"1#0", "1#1"}
+    assert task.gold_span["qc"] == (3.0, 6.0)
+    assert task.query_group["qd"] == task.document_group["1#1"] == "1"
+
+
+def test_ranks_within_groups():
+    from lsr.eval import ranks_from_scores, ranks_within_groups
+
+    qids, dids = ["q0", "q1"], ["a0", "a1", "b0"]
+    qrels = {"q0": {"a1"}, "q1": {"b0"}}
+    scores = np.array([[0.9, 0.5, 0.95],   # q0: b0 outranks gold only across groups
+                       [0.9, 0.8, 0.1]])   # q1: alone in group b
+    groups_q, groups_d = {"q0": "a", "q1": "b"}, {"a0": "a", "a1": "a", "b0": "b"}
+    assert ranks_from_scores(scores, qrels, qids, dids).tolist() == [3, 3]
+    assert ranks_within_groups(scores, qrels, qids, dids, groups_q, groups_d).tolist() == [2, 1]
+
+
+def test_text_in_span_and_wer_normalisation():
+    from lsr.backends.asr import Chunk, normalize_for_wer, text_in_span
+
+    chunks = [Chunk(0, 4, "Hello there."), Chunk(4, 9, "General Kenobi!"), Chunk(9, 12, "x")]
+    assert text_in_span(chunks, 0, 6) == "Hello there."  # second chunk's midpoint is 6.5
+    assert text_in_span(chunks, 6, 12) == "General Kenobi! x"
+    assert normalize_for_wer("It's  the Super-Bowl, 50!") == "it's the super bowl 50"

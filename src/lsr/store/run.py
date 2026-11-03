@@ -21,7 +21,7 @@ import json
 import platform
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -170,3 +170,11 @@ def read_embeddings(run_dir: Path) -> tuple[np.ndarray, np.ndarray, list[str], l
     query_ids, document_ids = ids["query_ids"], ids["document_ids"]
     _validate(query_emb, document_emb, query_ids, document_ids)
     return query_emb, document_emb, query_ids, document_ids
+
+
+def write_run(run_dir: Path, manifest: RunManifest, metrics: dict) -> None:
+    """Write ``provenance.json`` and ``metrics.json`` into a run directory."""
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "provenance.json").write_text(json.dumps(asdict(manifest), indent=2))
+    (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
