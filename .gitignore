@@ -7,6 +7,8 @@ __pycache__/
 # Data and artifacts: never in git. Provenance lives in runs/, data does not.
 data/
 runs/
+logs/
+results/
 checkpoints/
 *.pt
 *.pkl

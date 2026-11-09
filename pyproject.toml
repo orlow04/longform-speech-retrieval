@@ -21,9 +21,11 @@ dependencies = [
 [project.optional-dependencies]
 # One extra per retriever backend. Each is independently installable and no two
 # are required to coexist.
-clasp = ["torch", "transformers", "sentence-transformers", "torchvision", "Pillow", "librosa", "soundfile"]
+clasp = ["torch", "transformers", "sentence-transformers", "torchvision", "Pillow", "librosa", "soundfile", "matplotlib"]
 speechrag = ["torch", "transformers", "librosa", "soundfile", "faiss-cpu"]
 cascade = ["torch", "transformers", "accelerate", "sentence-transformers", "jiwer", "librosa", "soundfile"]
+# Everything scripts/profile_gpu.py loads: the whole plan's heavy components.
+profile = ["torch", "torchvision", "transformers", "accelerate", "sentence-transformers", "jiwer", "librosa", "soundfile"]
 parakeet = ["nemo-toolkit[asr]", "jiwer", "sentence-transformers"]
 perturb = ["librosa", "soundfile", "scipy"]
 longaudio = ["torch", "transformers", "accelerate", "librosa", "soundfile"]

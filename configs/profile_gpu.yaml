@@ -1,0 +1,49 @@
+# Predict whether the whole plan fits one GPU (scripts/profile_gpu.py).
+# Measures each stage on real audio, then multiplies out the workload below.
+# Takes ~15-30 min plus model downloads (~25 GB, mostly the audio LM).
+
+# Any real speech recording; a built article is ideal (~45 min, first 5 used).
+sample_audio: data/builds/longaudio/squad_concat/audio/articles/0.wav
+sample_seconds: 300
+
+stages:
+  asr:
+    model: openai/whisper-large-v3-turbo
+    batch_size: 8
+  text_encoder:
+    model: BAAI/bge-base-en-v1.5
+    batch_size: 64
+  audio_encoder:          # direct arm frontend (CLASP, speech-rag)
+    model: facebook/hubert-large-ls960-ft
+    window_s: 30
+    batch_size: 4
+  image_encoder:          # CLASP's spectrogram-image branch
+    window_s: 20
+    image_size: 600
+    batch_size: 8
+  train_step:             # bridge training; HuBERT-large is a conservative proxy
+    speech_model: facebook/hubert-large-ls960-ft
+    text_model: BAAI/bge-base-en-v1.5
+    clip_s: 60            # mean Spoken-SQuAD paragraph is 62 s of audio
+    batch_sizes: [2, 4, 8, 16, 32]
+    gradient_checkpointing: false
+  lalm:                   # long-form QA, CLSR Table 5's downstream model family
+    model: Qwen/Qwen2-Audio-7B-Instruct
+    max_new_tokens: 32
+
+workload:
+  label: Spoken-SQuAD dev, full plan
+  audio_hours: 35.4       # measured: dev_wav, 10,578 files
+  # clean + 2 voices + noise 6 + rate 6 + codec 6 + reverb 3 + emotion 7 (ParaSpeechRAG axes)
+  conditions: 31
+  window_configs: 3       # 30 s, 30 s / 15 s hop, 40 s
+  text_units: 10000       # per condition and window config: 2,067 paragraphs + ~8k windows
+  train_samples: 37107    # Spoken-SQuAD train, unfiltered (CLSR Tables 3-4)
+  epochs: 40              # CLSR finetune.yaml max_epoch
+  seeds: 3
+  trained_arms: 1         # the bridge; the dual-encoder arm trains an MLP on frozen features (minutes)
+  qa_instances: 500       # CLSR Table 5
+  qa_arms: 2              # no-retrieval baseline + retrieved segment
+  conditions_qa: 1
+  vc_voices: 2            # male + female conversions to generate if not on the box
+  vc_x_realtime: null     # Seed-VC speed on this GPU; fill in from a timed run

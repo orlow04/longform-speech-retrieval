@@ -1,0 +1,22 @@
+# The duration pilot on the 4090 (lab150). Same study as duration_pilot.yaml;
+# audio and checkpoints are read from the box's CLASP checkout in place.
+#
+#   bash scripts/run_pilot_4090.sh
+seed: 0
+build: data/builds/longaudio/squad_dev
+checkpoints:            # the checkpoint released with CLASP (huggingface llm-lab/CLASP)
+  official: /timevoz/CLASP/models/checkpoints/CLASP_Concat_Final_Fusion_Encoder.pt
+device: cuda
+chunk_s: 20.0
+durations: [paragraph, 30, 60, 300]
+pool_size: null
+arms: [clasp_mean, labse_text_mean, bm25_text]
+cache: cache
+
+builds:
+  squad_dev:
+    build: spoken_squad
+    json: ${LSR_DATA}/spoken_squad/spoken_test-v1.1.json
+    text_json: ${LSR_DATA}/squad/dev-v1.1.json
+    wav_dir: /timevoz/CLASP/data/datasets/spoken_squad/dev_wav
+    dir: data/builds/longaudio/squad_dev

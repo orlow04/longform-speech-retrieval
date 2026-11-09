@@ -176,3 +176,56 @@ def ranks_within_groups(
             scores[qi : qi + 1, cols], qrels, [q], [document_ids[j] for j in cols]
         )[0]
     return ranks
+
+
+def _log_comb(n: np.ndarray, k: np.ndarray) -> np.ndarray:
+    from math import lgamma
+
+    lg = np.vectorize(lgamma, otypes=[float])
+    return lg(n + 1) - lg(k + 1) - lg(n - k + 1)
+
+
+def sampled_pool_values(
+    ranks: np.ndarray, n_documents: int, pool_size: int, ks: tuple[int, ...] = (1, 5)
+) -> dict[str, np.ndarray]:
+    """Per-query *expected* Hits@k and reciprocal rank in a pool of ``pool_size``.
+
+    Comparing conditions whose pools differ in size (e.g. the same audio cut
+    into 30 s or 5 min documents) confounds the condition with the pool. This
+    puts each query against its gold plus ``pool_size - 1`` negatives drawn
+    uniformly without replacement from the full pool, and returns the exact
+    expectation over that draw: with ``m = rank - 1`` negatives scoring at or
+    above the gold (pessimistic ties, as everywhere), the number of them drawn
+    is hypergeometric. No sampling noise, so no seed. One relevant document per
+    query is assumed; ``ranks`` are full-pool ranks out of ``n_documents``.
+    """
+    ranks = np.asarray(ranks, dtype=np.int64)
+    n_neg, draw = n_documents - 1, pool_size - 1
+    if not 0 < draw <= n_neg:
+        raise ValueError(f"pool_size must be in [2, n_documents={n_documents}], got {pool_size}")
+    if ranks.min() < 1 or ranks.max() > n_documents:
+        raise ValueError("ranks must be in [1, n_documents]")
+    m = ranks - 1
+    x = np.arange(draw + 1)
+    # P(X = x) for X ~ Hypergeom(population n_neg, successes m, draws draw); rows = queries.
+    mm, xx = m[:, None], x[None, :]
+    ok = (xx <= mm) & (draw - xx <= n_neg - mm)
+    with np.errstate(invalid="ignore"):
+        logp = (_log_comb(np.broadcast_to(mm, ok.shape), np.where(ok, xx, 0))
+                + _log_comb(np.broadcast_to(n_neg - mm, ok.shape), np.where(ok, draw - xx, 0))
+                - _log_comb(np.array(n_neg), np.array(draw)))
+    p = np.where(ok, np.exp(logp), 0.0)
+    out = {f"Hits@{k}": p[:, :k].sum(axis=1) for k in ks}
+    out["MRR"] = (p / (x + 1)[None, :]).sum(axis=1)
+    return out
+
+
+def mean_ci(values: np.ndarray, n_resamples: int = 1000, confidence: float = 0.95,
+            seed: int = 0) -> tuple[float, float]:
+    """Percentile bootstrap CI of a mean over per-query values (as ``bootstrap_ci``)."""
+    values = np.asarray(values, dtype=float)
+    rng = np.random.default_rng(seed)
+    means = values[rng.integers(0, values.size, size=(n_resamples, values.size))].mean(axis=1)
+    alpha = (1 - confidence) / 2
+    lo, hi = np.quantile(means, [alpha, 1 - alpha])
+    return float(lo), float(hi)

@@ -1,0 +1,67 @@
+# Native vs. concatenated long spoken context (docs/PLAN.md, pillar 2).
+#
+#   uv run python scripts/download_spoken_squad.py
+#   uv run python scripts/download_coraal.py
+#   uv run python scripts/build_longaudio.py --config configs/longaudio.yaml
+#   uv run python scripts/run_longaudio.py   --config configs/longaudio.yaml
+#
+# ${LSR_DATA} defaults to data/datasets. Builds go to data/builds/longaudio/.
+
+builds:
+  # --- native: spontaneous interviews, 30-60+ min, hand-labelled answer spans
+  coraal_native:
+    build: coraal_qa
+    qa_dir: ${LSR_DATA}/coraal_qa
+    coraal_dir: ${LSR_DATA}/coraal
+    dir: data/builds/longaudio/coraal_native
+
+  # --- concatenated: Spoken-SQuAD articles (TTS sentences joined), ~43 min each.
+  # Three dev articles for a first run; drop `articles` for all 48.
+  # Sentence-level gold matches CORAAL's ~8 s answer spans; paragraph-level
+  # gold (~62 s) is the usual setup and is kept for comparison.
+  squad_concat:
+    build: spoken_squad
+    json: ${LSR_DATA}/spoken_squad/spoken_test-v1.1.json
+    # The text that was read aloud. Spoken-SQuAD's own JSON holds ASR output.
+    text_json: ${LSR_DATA}/squad/dev-v1.1.json
+    wav_dir: ${LSR_DATA}/spoken_squad/dev_wav
+    articles: [0, 10, 11]
+    dir: data/builds/longaudio/squad_concat
+    gold_units: [sentence]
+  squad_concat_paragraph:
+    build: alias            # same build, scored with paragraph-level gold
+    dir: data/builds/longaudio/squad_concat
+    gold_span: paragraph   # every question, scored against its whole paragraph
+
+  # --- controlled variants of the concatenation
+  squad_shuffled:           # paragraphs in random order: no discourse continuity
+    build: shuffled
+    from: squad_concat
+    seed: 0
+    dir: data/builds/longaudio/squad_shuffled
+    gold_units: [sentence]
+  squad_smoothed:           # edge silence trimmed, loudness levelled: no boundary cues
+    build: smoothed
+    from: squad_concat
+    dir: data/builds/longaudio/squad_smoothed
+    gold_units: [sentence]
+  coraal_spliced:           # CLSR Table 5 construction: paragraphs inside native interviews
+    build: spliced
+    from: squad_concat
+    host: coraal_native
+    pieces_per_host: 3
+    seed: 0
+    dir: data/builds/longaudio/coraal_spliced
+
+windows:
+  - {window_s: 30, hop_s: 15}
+  - {window_s: 60, hop_s: 20}   # CORAAL-QA paper's best setting
+min_overlap_s: 2.0
+
+arms: [random, cue_only, bm25_clean, dense_clean, bm25_asr, dense_asr]
+text_encoder: BAAI/bge-base-en-v1.5
+query_prefix: "Represent this sentence for searching relevant passages: "
+asr: openai/whisper-large-v3-turbo
+asr_batch_size: 8
+diagnostic_recordings: 50
+seed: 0

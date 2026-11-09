@@ -29,21 +29,25 @@ cached-embedding boundary. Everything else is a stub whose body raises
 
 | Module | What it owns | State |
 |---|---|---|
-| `lsr.tasks` | a Task = queries, documents, qrels, modalities, pool | `check_task`; LibriSQA, SLUE-SQA-5, Spoken-SQuAD builder |
+| `lsr.tasks` | a Task = queries, documents, qrels, modalities, pool | `check_task`; long-audio format; CORAAL-QA, Spoken-SQuAD, variants; LibriSQA, SLUE-SQA-5 |
 | `lsr.retrievers` | one protocol, N backends | protocol + `score_dense`; no backends yet |
 | `lsr.eval` | Hits@k, MRR, rank stats, bootstrap CIs | done |
 | `lsr.store` | run manifests, cached-embedding format | done |
 | `lsr.perturb` | noise, reverb, codec, rate, speaker, emotion | stub |
-| `lsr.longaudio` | segmentation, segment selection, downstream QA | fixed windows, localization; no selector yet |
+| `lsr.longaudio` | segmentation, segment selection, downstream QA | fixed windows, localization, acoustic-shortcut diagnostics |
 
-**First GPU try** — Spoken-SQuAD dev, three articles, original voice vs. one
-male and one female voice conversion, ASR cascade vs. clean text, paragraph and
-long-form:
+**Current study** — does long spoken-context retrieval need a native
+long-audio dataset, or do concatenations of short clips stand in for one?
+Native CORAAL-QA interviews vs. concatenated Spoken-SQuAD articles and
+controlled variants of them (docs/PLAN.md, pillar 2):
 
 ```sh
 uv pip install -e ".[dev,cascade]"
 uv run python scripts/download_spoken_squad.py      # JSON + dev audio, ~4.7 GB
-uv run python scripts/smoke_spoken_squad.py --config configs/smoke_spoken_squad.yaml
+uv run python scripts/download_coraal.py            # CORAAL-QA + 5 components
+uv run python scripts/build_longaudio.py --config configs/longaudio.yaml
+uv run python scripts/run_longaudio.py   --config configs/longaudio.yaml
+uv run python scripts/profile_gpu.py     --config configs/profile_gpu.yaml  # will it fit?
 ```
 
 Datasets live under `data/datasets/<name>/` (override with `$LSR_DATA`);

@@ -1,0 +1,29 @@
+# Pilot (Notion card "CLASP em diferentes durações de tempo"):
+# CLASP mean pooling on Spoken-SQuAD documents of 30 s, 1 min and 5 min built by
+# simple concatenation of sentence clips; "paragraph" = CLASP's training unit.
+#
+#   uv run python scripts/build_longaudio.py --config configs/duration_pilot.yaml
+#   uv run --extra clasp --extra cascade python scripts/run_duration_pilot.py \
+#       --config configs/duration_pilot.yaml
+#
+# On the 4090 use configs/duration_pilot_4090.yaml (same study, box paths).
+seed: 0
+build: data/builds/longaudio/squad_dev   # any spoken_squad build (with transcripts)
+# One clasp_mean arm per entry; HuBERT / EfficientNet / LaBSE are frozen and shared,
+# so extra checkpoints cost only a fusion-head pass.
+checkpoints:
+  official: ~/dev/paper-audio/clasp/CLASP/models/checkpoints/CLASP_Concat_Final_Fusion_Encoder.pt
+device: null          # cuda > mps > cpu
+chunk_s: 20.0         # CLASP's HuBERT / image window
+durations: [paragraph, 30, 60, 300]
+pool_size: null       # null = the smallest condition's document count
+arms: [clasp_mean, labse_text_mean, bm25_text]
+cache: cache          # per-chunk features, relative to the build
+
+builds:
+  squad_dev:          # all 48 Spoken-SQuAD dev articles (35.4 h)
+    build: spoken_squad
+    json: ${LSR_DATA}/spoken_squad/spoken_test-v1.1.json
+    text_json: ${LSR_DATA}/squad/dev-v1.1.json
+    wav_dir: ${LSR_DATA}/spoken_squad/dev_wav
+    dir: data/builds/longaudio/squad_dev

@@ -29,11 +29,13 @@ def test_core_does_not_import_torch():
     If this fails, a backend's dependency has leaked into the core and the
     metric path can no longer run in an environment that cannot install torch.
     """
+    import subprocess
     import sys
 
-    for module in CORE_MODULES:
-        importlib.import_module(module)
-    assert "torch" not in sys.modules
+    # A fresh interpreter: other tests in this process may have imported torch.
+    code = (f"import sys; [__import__(m) for m in {CORE_MODULES!r}]; "
+            "assert 'torch' not in sys.modules, 'torch leaked into the core'")
+    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 def test_query_and_document_are_hashable():

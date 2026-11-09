@@ -37,7 +37,8 @@ def raw(tmp_path):
     squad = {"data": [
         {"title": "A", "paragraphs": [
             {"context": "First para.  Two sentences.",
-             "qas": [{"id": "qa", "question": "what first?"},
+             "qas": [{"id": "qa", "question": "what first?",
+                      "answers": [{"text": "Two", "answer_start": 13}]},
                      {"id": "qb", "question": "what  else?"}]},
             {"context": "Second para.", "qas": [{"id": "qc", "question": "second?"}]},
         ]},
@@ -57,10 +58,10 @@ def raw(tmp_path):
 
 
 def test_collect_orders_chunks_and_counts_missing(raw):
-    paras, missing = collect_paragraphs(raw / "squad.json", raw / "wav")
+    paras, missing, gapped = collect_paragraphs(raw / "squad.json", raw / "wav")
     assert [p.id for p in paras] == ["0_0", "0_1", "1_0"]
     assert [w.name for w in paras[0].wav_paths] == ["0_0_0.wav", "0_0_1.wav"]
-    assert missing == 1
+    assert missing == 1 and gapped == []
 
 
 def test_collect_accepts_one_voice_rejects_mixed(raw):
@@ -72,10 +73,11 @@ def test_collect_accepts_one_voice_rejects_mixed(raw):
         collect_paragraphs(raw / "squad.json", voiced)
 
 
-def test_collect_rejects_gaps_in_chunks(raw):
-    make_wav(raw / "wav" / "1_0_2.wav", 1.0)
-    with pytest.raises(ValueError, match="non-contiguous"):
-        collect_paragraphs(raw / "squad.json", raw / "wav")
+def test_collect_skips_and_reports_paragraphs_with_missing_clips(raw):
+    make_wav(raw / "wav" / "1_0_2.wav", 1.0)  # clip 1 absent: audio incomplete
+    paras, _, gapped = collect_paragraphs(raw / "squad.json", raw / "wav")
+    assert gapped == ["1_0"]
+    assert "1_0" not in [p.id for p in paras]
 
 
 def test_concat_spans_and_format_check(tmp_path):
@@ -90,10 +92,15 @@ def test_concat_spans_and_format_check(tmp_path):
 
 
 def test_build_end_to_end(raw):
+    from lsr.tasks.longform import read_jsonl
+
     out = raw / "out"
     counts = build_spoken_squad(raw / "squad.json", raw / "wav", out)
     assert counts == {"articles": 2, "paragraphs": 3, "paragraphs_without_audio": 1,
-                      "questions": 4}
+                      "paragraphs_skipped_missing_clips": [],
+                      "questions": 4, "sentence_aligned_paragraphs": 3,
+                      "paragraph_aligned_paragraphs": 0, "questions_with_sentence_gold": 1,
+                      "text_source": "spoken_squad_asr"}
 
     task = ManifestTask("spoken_squad", out, "text", "audio", audio_root=out)
     check_task(task)
@@ -108,13 +115,23 @@ def test_build_end_to_end(raw):
     text_task = ManifestTask("spoken_squad", out, "text", "text")
     assert next(text_task.documents()).text == "First para. Two sentences."
 
-    articles = [json.loads(line) for line in (out / "articles.jsonl").read_text().splitlines()]
-    a0 = articles[0]
-    assert (a0["title"], a0["duration_s"]) == ("A", 6.0)
-    assert [(p["paragraph_id"], p["start_s"], p["end_s"]) for p in a0["paragraphs"]] == [
+    (r0, r1) = read_jsonl(out / "recordings.jsonl")
+    assert (r0["recording_id"], r0["kind"], r0["duration_s"]) == ("0", "concatenated", 6.0)
+    assert [(p["piece_id"], p["start_s"], p["end_s"]) for p in r0["pieces"]] == [
         ("0_0", 0.0, 3.0), ("0_1", 3.0, 6.0)]
-    assert a0["paragraphs"][0]["question_ids"] == ["qa", "qb"]
-    assert wav_duration_s(str(out / a0["audio"])) == 6.0
+    assert wav_duration_s(str(out / r0["audio"])) == 6.0
+
+    q = {row["query_id"]: row for row in read_jsonl(out / "questions.jsonl")}
+    # qa's answer is in the second sentence, the 1-3 s clip of paragraph 0_0.
+    assert (q["qa"]["gold_unit"], q["qa"]["gold_start_s"], q["qa"]["gold_end_s"]) == (
+        "sentence", 1.0, 3.0)
+    assert q["qa"]["paragraph_span"] == [0.0, 3.0]
+    assert (q["qb"]["gold_unit"], q["qb"]["gold_start_s"]) == ("paragraph", 0.0)
+    assert (q["qc"]["gold_start_s"], q["qc"]["gold_end_s"]) == (3.0, 6.0)
+
+    transcript = read_jsonl(out / "transcripts" / "0.jsonl")
+    assert [(u["start_s"], u["end_s"], u["text"]) for u in transcript[:2]] == [
+        (0.0, 1.0, "First para."), (1.0, 3.0, "Two sentences.")]
 
 
 # --- long audio -----------------------------------------------------------------
@@ -173,22 +190,28 @@ def test_build_restricts_to_articles(raw):
         build_spoken_squad(raw / "squad.json", raw / "wav", raw / "out2", articles=[1, 7])
 
 
-def test_longform_task(raw):
-    from lsr.tasks.spoken_squad import LongFormTask
+def test_longaudio_task_over_spoken_squad(raw):
+    from lsr.tasks.longform import LongAudioTask
 
     out = raw / "out"
     build_spoken_squad(raw / "squad.json", raw / "wav", out)
-    # Article 0 is 6 s (paragraphs 0-3 s, 3-6 s); article 1 is 4 s (one paragraph).
-    task = LongFormTask(out, FixedWindowSegmenter(window_s=2), min_overlap_s=1.0)
+    # Article 0 is 6 s; article 1 is 4 s.
+    task = LongAudioTask(out, FixedWindowSegmenter(window_s=2), min_overlap_s=1.0)
     check_task(task)
-    assert task.name == "spoken_squad_longform_tq2ac_out_fixed_w2_h2"
+    assert task.name == "longform_tq2ac_out_fixed_w2_h2"
     assert [d.id for d in task.documents()] == ["0#0", "0#1", "0#2", "1#0", "1#1"]
     qrels = task.qrels()
-    assert qrels["qa"] == qrels["qb"] == {"0#0", "0#1"}  # 2-3 s overlaps 1 s: counts
+    assert qrels["qa"] == {"0#0", "0#1"}  # sentence gold 1-3 s: 1 s in each window
+    assert qrels["qb"] == {"0#0", "0#1"}  # paragraph gold 0-3 s: 2-3 s overlaps 1 s
     assert qrels["qc"] == {"0#1", "0#2"}
-    assert qrels["qd"] == {"1#0", "1#1"}
-    assert task.gold_span["qc"] == (3.0, 6.0)
     assert task.query_group["qd"] == task.document_group["1#1"] == "1"
+    assert task.archive_valid and task.has_transcripts()
+    assert task.transcript_in_span("0", 0, 2) == "First para."  # midpoint rule
+    assert task.transcript_in_span("0", 0, 3) == "First para. Two sentences."
+
+    only = LongAudioTask(out, FixedWindowSegmenter(window_s=2), gold_units=("sentence",))
+    assert [q.id for q in only.queries()] == ["qa"]
+    assert only.name.endswith("_gold-sentence")
 
 
 def test_ranks_within_groups():
@@ -210,3 +233,32 @@ def test_text_in_span_and_wer_normalisation():
     assert text_in_span(chunks, 0, 6) == "Hello there."  # second chunk's midpoint is 6.5
     assert text_in_span(chunks, 6, 12) == "General Kenobi! x"
     assert normalize_for_wer("It's  the Super-Bowl, 50!") == "it's the super bowl 50"
+
+
+def test_original_text_replaces_asr_context(raw):
+    """Spoken-SQuAD's contexts are ASR output; the read-aloud text is SQuAD's."""
+    from lsr.tasks.longform import read_jsonl
+
+    original = json.loads((raw / "squad.json").read_text())
+    asr = json.loads((raw / "squad.json").read_text())
+    para = asr["data"][0]["paragraphs"][0]
+    para["context"] = "first para two sentences"  # what Spoken-SQuAD ships
+    para["qas"][0]["answers"] = [{"text": "two", "answer_start": 11}]
+    (raw / "asr.json").write_text(json.dumps(asr))
+    (raw / "orig.json").write_text(json.dumps(original))
+
+    counts = build_spoken_squad(raw / "asr.json", raw / "wav", raw / "o",
+                                text_json=raw / "orig.json")
+    assert counts["text_source"] == "squad_v1.1"
+    q = {r["query_id"]: r for r in read_jsonl(raw / "o" / "questions.jsonl")}
+    assert (q["qa"]["gold_unit"], q["qa"]["gold_start_s"]) == ("sentence", 1.0)
+    assert read_jsonl(raw / "o" / "transcripts" / "0.jsonl")[1]["text"] == "Two sentences."
+
+    counts = build_spoken_squad(raw / "asr.json", raw / "wav", raw / "a")
+    assert counts["text_source"] == "spoken_squad_asr"
+    assert counts["sentence_aligned_paragraphs"] == 2  # unpunctuated 0_0 no longer splits
+
+    original["data"][0]["paragraphs"][0]["qas"] = []
+    (raw / "bad.json").write_text(json.dumps(original))
+    with pytest.raises(ValueError, match="not in"):
+        build_spoken_squad(raw / "asr.json", raw / "wav", raw / "b", text_json=raw / "bad.json")
