@@ -8,7 +8,7 @@ checkpoints:            # the checkpoint released with CLASP (huggingface llm-la
   official: /timevoz/CLASP/models/checkpoints/CLASP_Concat_Final_Fusion_Encoder.pt
 device: cuda
 chunk_s: 20.0
-durations: [paragraph, 30, 60, 300]
+durations: [paragraph, 30, 60, 300, 1800]
 pool_size: null
 arms: [clasp_mean, labse_text_mean, bm25_text]
 cache: cache

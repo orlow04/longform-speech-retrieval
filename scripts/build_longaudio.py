@@ -2,7 +2,7 @@
 
     uv run python scripts/build_longaudio.py --config configs/longaudio.yaml
 
-Sources first (Spoken-SQuAD, CORAAL-QA), then variants derived from them
+Sources first (Spoken-SQuAD, CORAAL-QA, SPIRAL), then variants derived from them
 (shuffled, smoothed, spliced), in config order. An existing build is skipped;
 delete its directory to rebuild. Each build leaves ``build.json`` with its
 config, counts and git state.
@@ -20,6 +20,7 @@ from run_longaudio import load_config
 from lsr.store import current_manifest
 from lsr.tasks import variants
 from lsr.tasks.coraal_qa import build_coraal_qa
+from lsr.tasks.spiral import build_spiral
 from lsr.tasks.spoken_squad import build_spoken_squad
 
 
@@ -32,6 +33,10 @@ def build_one(name: str, spec: dict, dirs: dict[str, Path]) -> dict:
                                   Path(spec["text_json"]) if spec.get("text_json") else None)
     if kind == "coraal_qa":
         return build_coraal_qa(Path(spec["qa_dir"]), Path(spec["coraal_dir"]), out)
+    if kind == "spiral":
+        return build_spiral(Path(spec["jsonl"]), Path(spec["wav_dir"]), out,
+                            session_s=spec.get("session_s", 3600.0), seed=spec.get("seed", 0),
+                            limit=spec.get("limit"))
     if kind == "shuffled":
         return variants.shuffled(dirs[spec["from"]], out, seed=spec.get("seed", 0))
     if kind == "smoothed":

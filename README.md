@@ -50,6 +50,18 @@ uv run python scripts/run_longaudio.py   --config configs/longaudio.yaml
 uv run python scripts/profile_gpu.py     --config configs/profile_gpu.yaml  # will it fit?
 ```
 
+**Duration pilot** — does CLASP with mean pooling lose retrieval as documents
+grow from seconds to 30 min? Spoken-SQuAD sentences joined within an article,
+and whole SPIRAL recordings joined in shuffled order (docs/PLAN.md, "Pilot"):
+
+```sh
+uv pip install -e ".[dev,cascade,clasp]"
+uv run python scripts/download_spiral.py            # annotations + audio, 3.5 GB
+uv run python scripts/build_longaudio.py    --config configs/spiral_pilot.yaml
+uv run python scripts/run_duration_pilot.py --config configs/spiral_pilot.yaml
+# Spoken-SQuAD: configs/duration_pilot.yaml; both on the 4090: scripts/run_pilot_4090.sh
+```
+
 Datasets live under `data/datasets/<name>/` (override with `$LSR_DATA`);
 builds under `data/builds/`; every scored run under `runs/<run_id>/`.
 

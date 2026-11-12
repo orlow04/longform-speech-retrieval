@@ -135,7 +135,8 @@ comparison in point 1 is the controlled one).
 `scripts/run_duration_pilot.py`, `configs/duration_pilot.yaml`. Spoken-SQuAD
 sentence clips joined in article order into documents of ~30 s, ~1 min, ~5 min
 (`lsr.longaudio.grouping`, sentences never split), plus the original paragraphs
-(CLASP's training unit). A text question retrieves the document holding its
+(CLASP's training unit); ~30 min and SPIRAL were added on 2026-11-11 (end of
+this section). A text question retrieves the document holding its
 answer sentence from all documents of that duration. CLASP is reproduced in
 `lsr.backends.clasp` (parity with CLASP's code: cosine 1.000000 on HuBERT,
 image and fused outputs; `scripts/check_clasp_parity.py`). Controls: the same
@@ -169,9 +170,106 @@ Readings, provisional (27 five-minute documents in total):
    rank at equal n 22 → 19). The text arm shows the same direction, from a
    far more spread-out start (0.38 → 0.62).
 
-Next: all 48 dev articles on the 4090 (`bash scripts/run_pilot_4090.sh`;
-`configs/duration_pilot_4090.yaml`), official CLASP checkpoint. Then max-sim over chunks as the second pooling arm, a native
-long-audio control (CORAAL cut to the same durations), SPIRAL.
+**Full run (2026-11-09, all 48 dev articles, 4090, official checkpoint
+sha256 9ad6954a…, parity OK on cuda, 112 min).** 5,342 questions, none dropped;
+documents per condition 2,064 / 4,047 / 2,091 / 423. Fixed pool = 423 (every
+5-min document; chance 0.0024). A random pool of 423 holds ~9 same-article
+distractors in every condition, so the fixed pool compares like with like.
+`runs/20261109-204337_*`, `results/pilot_4090_20261109-204322.tar.gz`:
+
+| Duration | CLASP mean | LaBSE text mean | BM25 text | CLASP pairwise cos | CLASP eff. rank @423 | CLASP top-1 var |
+|---|---|---|---|---|---|---|
+| paragraph | 0.084 [0.078, 0.091] | 0.641 [0.63, 0.65] | 0.859 | 0.892 | 139 | 0.17 |
+| 30 s | 0.086 [0.080, 0.092] | 0.662 [0.65, 0.67] | 0.840 | 0.863 | 147 | 0.14 |
+| 1 min | 0.076 [0.070, 0.082] | 0.581 [0.57, 0.59] | 0.830 | 0.900 | 138 | 0.17 |
+| 5 min | 0.081 [0.073, 0.088] | 0.386 [0.37, 0.40] | 0.752 | 0.954 | 112 | 0.20 |
+
+Top-1 split into "right article" vs "right document given right article"
+(full pool, from the saved embeddings):
+
+| Duration | CLASP: top-1 in gold article | CLASP: correct given article | LaBSE-mean: in article | LaBSE-mean: correct given article | docs / article |
+|---|---|---|---|---|---|
+| paragraph | 0.21 | 0.15 | 0.81 | 0.56 | 43 |
+| 30 s | 0.19 | 0.10 | 0.82 | 0.50 | 84 |
+| 1 min | 0.22 | 0.13 | 0.79 | 0.48 | 44 |
+| 5 min | 0.28 | 0.29 | 0.76 | 0.51 | 9 |
+
+What changes with 48 articles:
+
+1. **The text arms confirm the 3-article result.** Mean-pooled LaBSE falls
+   0.66 → 0.39 from 30 s to 5 min (−42%), BM25 0.84 → 0.75 (−10%). Averaging
+   is still what fails. Mean-pooled LaBSE barely loses the article (0.82 →
+   0.76) but cannot pick the document inside it: 0.51 correct among 9
+   candidates at 5 min (chance 0.11) against 0.50 among 84 at 30 s (chance
+   0.012).
+2. **CLASP is flat with duration** (0.08–0.09, CIs overlapping), not falling
+   as on 3 articles. This is a floor effect, not robustness. CLASP finds the
+   right article for only ~1 question in 5 (chance 0.02); its query-gold
+   cosine (0.05–0.07) is below the best negative (0.07–0.15) on average. With
+   47 off-topic articles in the pool, cross-topic failure dominates, and it
+   does not get worse with length. Longer audio even helps CLASP find the
+   article (0.19 → 0.28) while hurting localisation within it. The two effects
+   cancel. The 3-article run, whose pool was mostly same-topic, saw the
+   localisation loss alone.
+3. **The latent space tightens with duration on the full data too:** CLASP
+   pairwise cosine 0.86 → 0.95, effective rank at 423 147 → 112, first
+   principal direction 14% → 20% of variance. 30 s is the least collapsed
+   condition for both arms, as on 3 articles. LaBSE-mean moves the same way
+   (0.27 → 0.50).
+4. **Paragraph ≈ 30 s for every arm.** Matching CLASP's training unit buys
+   nothing over a duration-matched grouping.
+
+Implication: the released CLASP is too weak at text-question → audio for
+duration effects to show through it. Duration effects need either an audio
+encoder that clears the topic floor, or the within-article pool (CLSR-style,
+as in §2) where CLASP's topical weakness is held fixed.
+
+**Added 2026-11-11, to run on the 4090 (`scripts/run_pilot_4090.sh`): the
+30 min condition and SPIRAL**, the two things the card names that the runs
+above lack.
+
+- *Spoken-SQuAD at ~30 min* (`durations: [paragraph, 30, 60, 300, 1800]`).
+  Articles have a median of 43 min of audio, so a 30 min document is half an
+  article or all of it, and there are only one or two per article (5 documents
+  on the 3-article build, 909–2,633 s). The task becomes "find the article".
+  The fixed pool shrinks to that document count, so every condition's
+  fixed-pool number is recomputed at the smaller pool. The table at pool 423
+  above stays the reference for the four shorter conditions.
+- *SPIRAL* (`configs/spiral_pilot.yaml`, `lsr.tasks.spiral`,
+  `scripts/download_spiral.py`; Lin et al., SpeechPrune, ICME 2025). 1,012
+  synthetic recordings (GPT-4o scripts, StyleTTS2 voices; 350 lectures, 338
+  conversations, 324 meetings; 61–134 s, median 87 s, 24.7 h in all, 24 kHz),
+  each with one question about one "key sentence" inside it. The passage is
+  the whole recording. Recordings are shuffled (seed 0) and joined into 25
+  sessions of ~1 h, then cut at recording boundaries: 1,012 documents of one
+  recording, 304 of ~5 min (median 283 s), 49 of ~30 min (median 1,818 s).
+  Fixed pool 49. Two differences from Spoken-SQuAD, both wanted: a document is
+  topically mixed (neighbouring recordings are unrelated), so there is no
+  same-article localisation problem and averaging has to dilute the gold
+  passage with unrelated speech; and the 30 min condition keeps 49 documents
+  instead of collapsing to one per article.
+- *Two queries on SPIRAL*: the question, and the key sentence itself (a
+  transcript sentence of the gold recording, i.e. the audio-to-transcript
+  matching CLASP was trained on, and the query CLASP's own SPIRAL evaluation
+  uses). If CLASP clears the floor with the key sentence, the duration effect
+  can show through it. If not, the floor is not about question style.
+- The annotations give the key sentence's index, not its time, so gold is the
+  whole source recording. Parity with CLASP's code holds on 24 kHz SPIRAL audio
+  too (cosine 1.000000, Mac).
+- Smoke run on 40 recordings (Mac, `runs/20261111-210210_*`, numbers not
+  meaningful at this size): the pipeline runs end to end for both queries.
+  CLASP full-pool Hits@1 at one recording per document was 0.10 for the
+  question and 0.05 for the key sentence among 40 documents (chance 0.025),
+  against 0.85 and 0.88 for mean-pooled LaBSE: the floor may well persist.
+
+Each run now also writes `runs/<stamp>_duration_pilot_gold.json` (the gold
+document of every query in every condition), so within-recording pools can be
+scored afterwards from the saved embeddings.
+
+Next, after these two runs: within-article pool results alongside the global
+pool; max-sim over chunks as the second pooling arm (per-chunk features are
+cached on the box); a native long-audio control (CORAAL cut to the same
+durations).
 
 ## 3. Degradations
 

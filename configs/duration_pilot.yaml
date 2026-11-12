@@ -1,5 +1,5 @@
-# Pilot (Notion card "CLASP em diferentes durações de tempo"):
-# CLASP mean pooling on Spoken-SQuAD documents of 30 s, 1 min and 5 min built by
+# Pilot (Notion card "Validar o problema"):
+# CLASP mean pooling on Spoken-SQuAD documents of 30 s, 1 min, 5 min and 30 min built by
 # simple concatenation of sentence clips; "paragraph" = CLASP's training unit.
 #
 #   uv run python scripts/build_longaudio.py --config configs/duration_pilot.yaml
@@ -15,7 +15,7 @@ checkpoints:
   official: ~/dev/paper-audio/clasp/CLASP/models/checkpoints/CLASP_Concat_Final_Fusion_Encoder.pt
 device: null          # cuda > mps > cpu
 chunk_s: 20.0         # CLASP's HuBERT / image window
-durations: [paragraph, 30, 60, 300]
+durations: [paragraph, 30, 60, 300, 1800]
 pool_size: null       # null = the smallest condition's document count
 arms: [clasp_mean, labse_text_mean, bm25_text]
 cache: cache          # per-chunk features, relative to the build

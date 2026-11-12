@@ -3,21 +3,32 @@
     uv run --extra clasp --extra cascade python scripts/run_duration_pilot.py \
         --config configs/duration_pilot.yaml
 
-The Notion "Validar" card: CLASP with mean pooling on audio of 30 s, 1 min and
-5 min, built by simple concatenation of passages, plus a look at the latent
-space. Here the passages are Spoken-SQuAD sentence clips (one TTS clip per
-sentence of the SQuAD text), joined in article order into documents of each
-target duration (``lsr.longaudio.grouping``); ``paragraph`` uses the original
-paragraphs, CLASP's training unit, as an anchor to its known numbers.
+The Notion "Validar" card: CLASP with mean pooling on audio of 30 s, 5 min and
+30 min, built by simple concatenation of passages, plus a look at the latent
+space. Two builds:
 
-A text question retrieves the document holding the sentence that contains its
-answer, from every document of that duration across all articles. Arms:
+- Spoken-SQuAD (``configs/duration_pilot*.yaml``): the passages are sentence
+  clips (one TTS clip per sentence of the SQuAD text), joined in article order
+  into documents of each target duration (``lsr.longaudio.grouping``);
+  ``paragraph`` uses the original paragraphs, CLASP's training unit, as an
+  anchor to its known numbers.
+- SPIRAL (``configs/spiral_pilot*.yaml``): the passages are whole ~90 s
+  recordings, shuffled and joined (``lsr.tasks.spiral``); ``unit`` is one
+  recording on its own.
+
+A text query retrieves the document holding its gold span (the sentence that
+contains the answer; for SPIRAL, the source recording), from every document of
+that duration across all recordings. ``queries`` names the fields of
+``questions.jsonl`` used as query text: ``text`` (the question) and, where the
+build has it, ``key_sentence`` (the transcript sentence the question is about,
+i.e. the audio-to-its-own-transcript matching CLASP was trained on). Arms:
 
     clasp_mean       CLASP audio, one arm per entry of ``checkpoints``: HuBERT
                      + spectrogram image averaged over 20 s chunks, fused once
                      (CLASP's own long-audio rule); query = LaBSE(question)
     labse_text_mean  the same pooling rule on the gold text: mean of LaBSE
-                     sentence embeddings. Separates "longer documents are
+                     sentence embeddings (a unit's ``sentences`` where the
+                     transcript has them, else the unit's text). Separates "longer documents are
                      harder" from "the audio encoder degrades with length"
     bm25_text        BM25 on the document's gold text
 
@@ -72,7 +83,10 @@ def load_build(build_dir: Path):
 def make_groups(cond, recordings, units) -> dict[str, list[Group]]:
     out = {}
     for rid, rec in recordings.items():
-        if cond == "paragraph":
+        if cond == "unit":
+            out[rid] = [Group(rid, k, u["start_s"], u["end_s"], (k,))
+                        for k, u in enumerate(units[rid])]
+        elif cond == "paragraph":
             out[rid] = [Group(rid, k, p["start_s"], p["end_s"],
                               tuple(i for i, u in enumerate(units[rid])
                                     if p["start_s"] - 0.05 <= u["start_s"] < p["end_s"] - 0.05))
@@ -157,7 +171,10 @@ def main() -> None:
         else:
             dropped += 1
     qrows = [q for q in questions if q["query_id"] in gold]
-    qids, qtext = [q["query_id"] for q in qrows], [q["text"] for q in qrows]
+    qids = [q["query_id"] for q in qrows]
+    qfields = cfg.get("queries") or ["text"]
+    qtexts = {f: [q[f] for q in qrows] for f in qfields}
+    source = next(iter(recordings.values())).get("source", "longform")
     pool_size = cfg.get("pool_size") or min(len(flat[c]) for c in conds)
     print(f"{len(recordings)} recordings, {len(qids)} questions "
           f"({dropped} dropped: gold straddles a document boundary somewhere), "
@@ -183,14 +200,18 @@ def main() -> None:
     fusions = {k: load_fusion(p, enc.device) for k, p in ckpts.items()}
     arms = [a for arm in arms
             for a in ([f"clasp_mean:{k}" for k in ckpts] if arm == "clasp_mean" else [arm])]
-    q_emb = enc.embed_texts(qtext)
+    q_embs = {f: enc.embed_texts(t) for f, t in qtexts.items()}
     feats = chunk_features(enc, build_dir, recordings, groups,
                            build_dir / cfg.get("cache", "cache")) \
         if any(a.startswith("clasp_mean") for a in arms) else {}
+    # Per unit, its sentence embeddings: [n_sentences, 768] (one row if it has no split).
     unit_emb = {}
     if "labse_text_mean" in arms:
         for rid in recordings:
-            unit_emb[rid] = enc.embed_texts([u["text"] for u in units[rid]])
+            sents = [u.get("sentences") or [u["text"]] for u in units[rid]]
+            emb = enc.embed_texts([s for ss in sents for s in ss])
+            off = np.cumsum([0] + [len(ss) for ss in sents])
+            unit_emb[rid] = [emb[a:b] for a, b in zip(off[:-1], off[1:])]
 
     summary = []
     for c in conds:
@@ -200,60 +221,69 @@ def main() -> None:
         gidx = np.array([col[gold[q][c]] for q in qids])
         text = [" ".join(units[g.recording_id][i]["text"] for i in g.units) for g in docs]
         for arm in arms:
-            t0 = time.perf_counter()
-            d_emb, geom = None, {}
+            d_emb, doc_geom = None, {}
             if arm.startswith("clasp_mean:"):
                 raw = np.stack(enc.pool(feats[c], "mean", fusions[arm.split(":", 1)[1]]))
-                d_emb = l2n(raw)
-                geom = embedding_stats(raw, n_sub=pool_size, seed=seed)
             elif arm == "labse_text_mean":
-                raw = np.stack([unit_emb[g.recording_id][list(g.units)].mean(axis=0)
-                                for g in docs])
-                d_emb = l2n(raw)
-                geom = embedding_stats(raw, n_sub=pool_size, seed=seed)
-            elif arm == "bm25_text":
-                scores = bm25_scores(qtext, text)
-            else:
+                raw = np.stack([np.concatenate([unit_emb[g.recording_id][i] for i in g.units])
+                                .mean(axis=0) for g in docs])
+            elif arm != "bm25_text":
                 raise ValueError(f"unknown arm {arm!r}")
-            if d_emb is not None:
-                scores = q_emb @ d_emb.T
-                geom.update(score_stats(scores, gidx))
-            result = score_condition(scores, gidx, qids, dids, pool_size, seed)
-            result["geometry"] = geom
-            result["doc_duration_s_median"] = float(np.median([g.duration_s for g in docs]))
-            result["dropped_questions"] = dropped
+            if arm != "bm25_text":
+                d_emb = l2n(raw)
+                doc_geom = embedding_stats(raw, n_sub=pool_size, seed=seed)
+            for qf in qfields:
+                t0 = time.perf_counter()
+                geom = dict(doc_geom)
+                if d_emb is None:
+                    scores = bm25_scores(qtexts[qf], text)
+                else:
+                    scores = q_embs[qf] @ d_emb.T
+                    geom.update(score_stats(scores, gidx))
+                result = score_condition(scores, gidx, qids, dids, pool_size, seed)
+                result["geometry"] = geom
+                result["doc_duration_s_median"] = float(np.median([g.duration_s for g in docs]))
+                result["dropped_questions"] = dropped
+                result["query_field"] = qf
 
-            run_id = f"{stamp}_duration_{c}_{arm.replace(':', '-')}"
-            run_dir = REPO / "runs" / run_id
-            if d_emb is not None:
-                write_embeddings(run_dir, q_emb, d_emb, qids, dids)
-            manifest = current_manifest(
-                run_id=run_id, task=f"spoken_squad_duration_{c}_{build_dir.name}", retriever=arm,
-                config_hash=cfg_hash, seed=seed, n_queries=len(qids), n_documents=len(dids),
-                wall_clock_s=round(time.perf_counter() - t0, 2),
-                **({"notes": f"checkpoint {ckpts[arm.split(':', 1)[1]]}",
-                    "checkpoint_sha256": ckpt_sha[arm.split(":", 1)[1]]}
-                   if arm.startswith("clasp_mean:") else {}))
-            write_run(run_dir, manifest, result)
-            row = {"duration": c, "arm": arm, "n_docs": len(dids), "n_queries": len(qids),
-                   "full_Hits@1": result["full_pool"]["Hits@1"],
-                   "full_Hits@10": result["full_pool"]["Hits@10"],
-                   "full_MRR": result["full_pool"]["MRR"],
-                   "fixed_Hits@1": result["fixed_pool"]["Hits@1"],
-                   "fixed_Hits@1_lo": result["fixed_pool"]["Hits@1_ci95"][0],
-                   "fixed_Hits@1_hi": result["fixed_pool"]["Hits@1_ci95"][1],
-                   "fixed_MRR": result["fixed_pool"]["MRR"],
-                   **{k: geom.get(k, float("nan")) for k in
-                      ("raw_norm", "pairwise_cos", "effective_rank", "effective_rank_sub",
-                       "top1_var", "top1_var_sub", "gold_cos",
-                       "best_negative_cos", "margin")}}
-            summary.append(row)
-            print(f"[{c:>9} | {arm:22s}] full H@1 {row['full_Hits@1']:.3f}  "
-                  f"fixed({pool_size}) H@1 {row['fixed_Hits@1']:.3f} "
-                  f"[{row['fixed_Hits@1_lo']:.3f}, {row['fixed_Hits@1_hi']:.3f}]  "
-                  f"pairwise_cos {row['pairwise_cos']:.3f}  "
-                  f"eff_rank@{pool_size} {row['effective_rank_sub']:.1f}")
+                run_id = (f"{stamp}_duration_{c}_{arm.replace(':', '-')}"
+                          + ("" if qf == "text" else f"_q-{qf}"))
+                run_dir = REPO / "runs" / run_id
+                if d_emb is not None:
+                    write_embeddings(run_dir, q_embs[qf], d_emb, qids, dids)
+                manifest = current_manifest(
+                    run_id=run_id, task=f"{source}_duration_{c}_{build_dir.name}"
+                    + ("" if qf == "text" else f"_q-{qf}"), retriever=arm,
+                    config_hash=cfg_hash, seed=seed, n_queries=len(qids), n_documents=len(dids),
+                    wall_clock_s=round(time.perf_counter() - t0, 2),
+                    **({"notes": f"checkpoint {ckpts[arm.split(':', 1)[1]]}",
+                        "checkpoint_sha256": ckpt_sha[arm.split(":", 1)[1]]}
+                       if arm.startswith("clasp_mean:") else {}))
+                write_run(run_dir, manifest, result)
+                row = {"duration": c, "arm": arm, "query": qf, "n_docs": len(dids),
+                       "n_queries": len(qids),
+                       "full_Hits@1": result["full_pool"]["Hits@1"],
+                       "full_Hits@10": result["full_pool"]["Hits@10"],
+                       "full_MRR": result["full_pool"]["MRR"],
+                       "fixed_Hits@1": result["fixed_pool"]["Hits@1"],
+                       "fixed_Hits@1_lo": result["fixed_pool"]["Hits@1_ci95"][0],
+                       "fixed_Hits@1_hi": result["fixed_pool"]["Hits@1_ci95"][1],
+                       "fixed_MRR": result["fixed_pool"]["MRR"],
+                       **{k: geom.get(k, float("nan")) for k in
+                          ("raw_norm", "pairwise_cos", "effective_rank", "effective_rank_sub",
+                           "top1_var", "top1_var_sub", "gold_cos",
+                           "best_negative_cos", "margin")}}
+                summary.append(row)
+                print(f"[{c:>9} | {arm:22s} | {qf:12s}] full H@1 {row['full_Hits@1']:.3f}  "
+                      f"fixed({pool_size}) H@1 {row['fixed_Hits@1']:.3f} "
+                      f"[{row['fixed_Hits@1_lo']:.3f}, {row['fixed_Hits@1_hi']:.3f}]  "
+                      f"pairwise_cos {row['pairwise_cos']:.3f}  "
+                      f"eff_rank@{pool_size} {row['effective_rank_sub']:.1f}")
 
+    # Each query's gold document per condition, so runs can be re-scored on other
+    # pools (e.g. within one recording) from the saved embeddings alone.
+    (REPO / "runs" / f"{stamp}_duration_pilot_gold.json").write_text(json.dumps(
+        {"query_ids": qids, "gold": {c: [gold[q][c] for q in qids] for c in conds}}))
     out = REPO / "runs" / f"{stamp}_duration_pilot_summary"
     out.with_suffix(".json").write_text(json.dumps(
         {"config": cfg, "pool_size": pool_size, "dropped_questions": dropped, "rows": summary},

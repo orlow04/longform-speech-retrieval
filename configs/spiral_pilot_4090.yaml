@@ -1,0 +1,27 @@
+# Pilot (Notion card "Validar o problema") on SPIRAL: CLASP mean pooling on
+# documents of one recording (~85 s), 5 min and 30 min, built by joining whole
+# SPIRAL recordings in shuffled order. Same study as spiral_pilot.yaml, box paths.
+#
+#   bash scripts/run_pilot_4090.sh
+seed: 0
+build: data/builds/longaudio/spiral
+checkpoints:
+  official: /timevoz/CLASP/models/checkpoints/CLASP_Concat_Final_Fusion_Encoder.pt
+device: cuda
+chunk_s: 20.0
+durations: [unit, 300, 1800]   # unit = one SPIRAL recording on its own
+# Query text: the question, and the key sentence itself (a transcript sentence of
+# the gold recording: the audio-to-transcript matching CLASP was trained on).
+queries: [text, key_sentence]
+pool_size: null       # null = the smallest condition's document count
+arms: [clasp_mean, labse_text_mean, bm25_text]
+cache: cache
+
+builds:
+  spiral:             # all 1,012 recordings, packed into ~1 h sessions
+    build: spiral
+    jsonl: ${LSR_DATA}/spiral/data.jsonl
+    wav_dir: ${LSR_DATA}/spiral/wavs
+    session_s: 3600
+    seed: 0
+    dir: data/builds/longaudio/spiral
