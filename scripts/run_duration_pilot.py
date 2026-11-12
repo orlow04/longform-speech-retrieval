@@ -104,10 +104,11 @@ def chunk_features(enc, build_dir, recordings, groups_by_cond, cache: Path):
     for cond in groups_by_cond:
         f = cache / f"clasp_chunks_{cond}.npz"
         if f.exists():
-            z = np.load(f)
-            off = z["offsets"]
-            out[cond] = [ChunkFeatures(z["hubert"][a:b], z["image"][a:b])
-                         for a, b in zip(off[:-1], off[1:])]
+            # Read each array once: indexing an NpzFile re-reads the whole array, and a
+            # slice keeps its copy alive (per group, that was the full cache per document).
+            with np.load(f) as z:
+                off, hub, img = z["offsets"], z["hubert"], z["image"]
+            out[cond] = [ChunkFeatures(hub[a:b], img[a:b]) for a, b in zip(off[:-1], off[1:])]
         else:
             todo.append(cond)
     if not todo:

@@ -42,7 +42,12 @@ echo "== tests"
 uv run pytest -q
 
 run_pilot() {   # $1 = config; appends its run stamp to STAMPS
-    time uv run python scripts/run_duration_pilot.py --config "$1"
+    local rc=0
+    time uv run python scripts/run_duration_pilot.py --config "$1" || rc=$?
+    if [[ $rc -ne 0 ]]; then    # a killed process leaves no traceback (137 = out of memory)
+        echo "pilot failed: exit code $rc ($1)"
+        exit "$rc"
+    fi
     local summary
     summary=$(find runs -maxdepth 1 -name '*_duration_pilot_summary.tsv' | sort | tail -n 1)
     STAMPS+=("$(basename "$summary" _duration_pilot_summary.tsv)")
